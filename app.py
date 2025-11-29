@@ -1,3 +1,6 @@
+import eventlet
+eventlet.monkey_patch()
+
 from flask import Flask, render_template, jsonify
 from flask_socketio import SocketIO, emit
 import time
@@ -6,6 +9,7 @@ import re
 from datetime import datetime
 import ipaddress
 import html
+import os
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'firewall-simulator-secret-key'
@@ -708,8 +712,11 @@ Examples:
     })
 
 if __name__ == '__main__':
+    debug_mode = os.environ.get('FLASK_ENV') == 'development'
+    
     print("="*60)
     print("WebApp Firewall Simulator - Educational Tool")
+    print(f"  Mode: {'Development' if debug_mode else 'Production'}")
     print("="*60)
     print("Server starting at: http://localhost:5000")
     print("\nExample commands:")
@@ -717,4 +724,11 @@ if __name__ == '__main__':
     print("  iptables -A OUTPUT -p tcp --dport 80 -j ACCEPT")
     print("  nmap -p 80,443 192.168.30.10")
     print("="*60)
-    socketio.run(app, debug=True, host='0.0.0.0', port=5000)
+    
+    socketio.run(
+        app,
+        debug=debug_mode,
+        host='0.0.0.0',
+        port=5000,
+        allow_unsafe_werkzeug=True
+    )
