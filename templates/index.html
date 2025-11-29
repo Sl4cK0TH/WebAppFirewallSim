@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebApp Firewall Simulator</title>
+    
+    <!-- xterm.js CSS -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.min.css" />
+    
+    <!-- Custom CSS -->
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🔥 WebApp Firewall Simulator</h1>
+            <p class="subtitle">Network Security Training Environment</p>
+        </header>
+        
+        <div class="control-panel">
+            <button class="download-rules-btn" onclick="downloadRules()">
+                📥 Download Rules
+            </button>
+            <button class="show-logs-btn" onclick="toggleLogs()">
+                📋 View Logs
+            </button>
+            <button class="clear-logs-btn" onclick="clearLogs()">
+                🗑️ Clear Logs
+            </button>
+        </div>
+        
+        <div id="logs-panel" class="logs-panel">
+            <div class="logs-header">
+                <h3>Firewall Logs</h3>
+                <div class="logs-actions">
+                    <button class="download-logs-btn" onclick="downloadLogs()">📥 Download Logs</button>
+                    <button class="close-logs-btn" onclick="toggleLogs()">✕</button>
+                </div>
+            </div>
+            <div class="logs-filters">
+                <button class="filter-btn active" onclick="filterLogs('all')">All</button>
+                <button class="filter-btn" onclick="filterLogs('blocked')">Blocked</button>
+                <button class="filter-btn" onclick="filterLogs('allowed')">Allowed</button>
+                <button class="filter-btn" onclick="filterLogs('warnings')">Warnings</button>
+            </div>
+            <div class="logs-stats">
+                <div class="stat-item">
+                    <span class="stat-label">Total:</span>
+                    <span class="stat-value" id="total-logs">0</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-label">Blocked:</span>
+                    <span class="stat-value" id="blocked-logs">0</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-label">Allowed:</span>
+                    <span class="stat-value" id="allowed-logs">0</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-label">Warnings:</span>
+                    <span class="stat-value" id="warning-logs">0</span>
+                </div>
+            </div>
+            <div id="logs-content" class="logs-content"></div>
+        </div>
+        
+        <div class="info-panel">
+            <div class="info-card">
+                <h3>Network Topology</h3>
+                <div class="topology">
+                    <div class="zone insider-zone">
+                        <strong>LAN1 - Internal</strong><br>
+                        <span id="insider-display-ip">Not configured</span><br>
+                        <small id="insider-network">Network: N/A</small>
+                    </div>
+                    <div class="firewall-icon">🛡️</div>
+                    <div class="zone outsider-zone">
+                        <strong>LAN2 - External</strong><br>
+                        <span id="outsider-display-ip">Not configured</span><br>
+                        <small id="outsider-network">Network: N/A</small>
+                    </div>
+                    <div class="firewall-icon">🛡️</div>
+                    <div class="zone dmz-zone">
+                        <strong>DMZ - Web Server</strong><br>
+                        <span id="dmz-display-ip">Not configured</span><br>
+                        <small id="dmz-network">Network: N/A</small>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="info-card">
+                <h3>Essential Commands</h3>
+                <ul class="command-list">
+                    <li><code>ifconfig set ip &lt;ip&gt;</code> - Set IP address</li>
+                    <li><code>iptables -L</code> - List firewall rules</li>
+                    <li><code>iptables -A &lt;chain&gt; ...</code> - Add rule</li>
+                    <li><code>nmap -p &lt;ports&gt; &lt;ip&gt;</code> - Port scan</li>
+                    <li><code>ping &lt;target&gt;</code> - Test connectivity</li>
+                    <li><code>help</code> - Show all commands</li>
+                </ul>
+            </div>
+        </div>
+        
+        <div class="firewall-terminal-section">
+            <h2>🛡️ Firewall Configuration Terminal</h2>
+            <p class="firewall-hint">Configure firewall rules here to control traffic between all networks</p>
+            <div class="terminal-wrapper firewall-wrapper">
+                <div class="terminal-header firewall-header">
+                    <span class="terminal-icon">🔧</span>
+                    <span class="terminal-title" id="firewall-terminal-title">Firewall Administrator</span>
+                    <span class="terminal-status">● Online</span>
+                </div>
+                <div id="terminal-firewall" class="terminal-body"></div>
+            </div>
+        </div>
+        
+        <h2>💻 Network Terminals</h2>
+        <div class="terminals-container">
+            <div class="terminal-wrapper" id="wrapper-insider" >
+                <div class="terminal-header insider-header ">
+                    <span class="terminal-icon">🏢</span>
+                    <span class="terminal-title" id="insider-terminal-title">LAN1 - Internal PC</span>
+                    <span class="terminal-status">● Online</span>
+                    
+                </div>
+                <div id="terminal-insider" class="terminal-body"></div>
+            </div>
+            
+            <div class="terminal-wrapper" id="wrapper-outsider" >
+                <div class="terminal-header outsider-header ">
+                    <span class="terminal-icon">🌐</span>
+                    <span class="terminal-title" id="outsider-terminal-title">LAN2 - External PC</span>
+                    <span class="terminal-status">● Online</span>
+                    
+                </div>
+                <div id="terminal-outsider" class="terminal-body"></div>
+            </div>
+            
+            <div class="terminal-wrapper" id="wrapper-dmz" >
+                <div class="terminal-header dmz-header ">
+                    <span class="terminal-icon">🖥️</span>
+                    <span class="terminal-title" id="dmz-terminal-title">DMZ - Web Server</span>
+                    <span class="terminal-status">● Online</span>
+                    
+                </div>
+                <div id="terminal-dmz" class="terminal-body"></div>
+            </div>
+        </div>
+        
+        <footer>
+            <p>Educational Firewall Simulator | Configure networks with <code>ifconfig</code> | Manage firewall with <code>iptables</code> | Type <code>help</code> for all commands</p>
+            <p class="creator">Created by <strong>Van Glenndon Enad</strong></p>
+        </footer>
+    </div>
+    
+    <!-- Socket.IO -->
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+    
+    <!-- xterm.js -->
+    <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.min.js"></script>
+    
+    <!-- Custom JavaScript -->
+    <script src="{{ url_for('static', filename='script.js') }}"></script>
+</body>
+</html>
