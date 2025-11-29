@@ -436,7 +436,7 @@ def handle_nmap_command(terminal, parts):
     
     for port in ports_to_scan:
         # Check firewall rules
-        allowed, message = check_iptables_rule('OUTPUT', source_ip, target, 'tcp', port)
+        allowed, message = check_iptables_rule('FORWARD', source_ip, target, 'tcp', port)
         
         if allowed:
             # Simulate port state
@@ -471,7 +471,7 @@ def handle_ping_command(terminal, target):
     safe_target = html.escape(target)
     
     # Check firewall
-    allowed, message = check_iptables_rule('OUTPUT', source_ip, target, 'icmp', None)
+    allowed, message = check_iptables_rule('FORWARD', source_ip, target, 'icmp', None)
     
     if not allowed:
         return f"ping: {safe_target}: {html.escape(message)}\n"
@@ -671,7 +671,7 @@ Examples:
                     target, port = parts[1], parts[2]
                     safe_target = html.escape(target)
                     safe_port = html.escape(port)
-                    allowed, message = check_iptables_rule('OUTPUT', source_ip, target, 'tcp', port)
+                    allowed, message = check_iptables_rule('FORWARD', source_ip, target, 'tcp', port)
                     if allowed:
                         output = f"Connection to {safe_target} {safe_port} port [tcp/*] succeeded!\n"
                     else:
@@ -694,7 +694,7 @@ Examples:
                         target = '8.8.8.8'
                     
                     port = '443' if 'https' in url else '80'
-                    allowed, message = check_iptables_rule('OUTPUT', source_ip, target, 'tcp', port)
+                    allowed, message = check_iptables_rule('FORWARD', source_ip, target, 'tcp', port)
                     if allowed:
                         output = f"HTTP/1.1 200 OK\nContent-Type: text/html\n\n<html><body>Response from {safe_url}</body></html>\n"
                     else:
