@@ -1,0 +1,24 @@
+# render.yaml
+# This file configures the deployment on Render.
+# See https://render.com/docs/blueprint-spec for details.
+
+services:
+  - type: web
+    name: firewall-simulator
+    # Environment for the service (Python 3)
+    env: python
+    # Render instance type
+    plan: free
+    # Specify the Python version
+    pythonVersion: "3.12"
+    # Build command to install dependencies
+    buildCommand: "pip install -r requirements.txt"
+    # Start command to run the production server
+    startCommand: "gunicorn --worker-class eventlet -w 1 --bind 0.0.0.0:$PORT app:app"
+    # Environment variables
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12"
+      # Set FLASK_ENV to 'production' to ensure debug mode is off
+      - key: FLASK_ENV
+        value: "production"

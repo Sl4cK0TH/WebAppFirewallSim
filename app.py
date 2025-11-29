@@ -713,12 +713,13 @@ Examples:
 
 if __name__ == '__main__':
     debug_mode = os.environ.get('FLASK_ENV') == 'development'
+    port = int(os.environ.get('PORT', 5000))
     
     print("="*60)
     print("WebApp Firewall Simulator - Educational Tool")
     print(f"  Mode: {'Development' if debug_mode else 'Production'}")
     print("="*60)
-    print("Server starting at: http://localhost:5000")
+    print(f"Server starting at: http://localhost:{port}")
     print("\nExample commands:")
     print("  ifconfig set ip 192.168.10.10")
     print("  iptables -A OUTPUT -p tcp --dport 80 -j ACCEPT")
@@ -729,6 +730,6 @@ if __name__ == '__main__':
         app,
         debug=debug_mode,
         host='0.0.0.0',
-        port=5000,
+        port=port,
         allow_unsafe_werkzeug=True
     )
