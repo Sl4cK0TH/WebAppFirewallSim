@@ -72,6 +72,7 @@ def log_firewall_event(action, source, destination, protocol, port, rule_info=""
     # Keep only last MAX_LOGS entries
     if len(session['firewall_logs']) > MAX_LOGS:
         session['firewall_logs'] = session['firewall_logs'][-MAX_LOGS:]
+    session.modified = True
     
     # Broadcast log to the current client
     socketio.emit('new_log', log_entry)
@@ -157,6 +158,7 @@ def check_iptables_rule(chain, source_ip, dest_ip, protocol, port):
         if idx < len(session['rule_counters'][chain]):
             session['rule_counters'][chain][idx]['packets'] += 1
             session['rule_counters'][chain][idx]['bytes'] += random.randint(40, 1500)
+            session.modified = True
         
         # Log if LOG action
         if rule['target'] == 'LOG':
@@ -220,6 +222,7 @@ def handle_ifconfig_command(terminal, parts):
             session['network_config'][terminal]['ip'] = ip
             session['network_config'][terminal]['network'] = network
             session['network_config'][terminal]['gateway'] = gateway
+            session.modified = True
             
             # Update display
             socketio.emit('update_ip_display', {
@@ -284,6 +287,7 @@ def handle_iptables_command(terminal, parts):
             if chain in session['iptables_rules']:
                 session['iptables_rules'][chain] = []
                 session['rule_counters'][chain] = []
+                session.modified = True
                 return f"Flushed {chain} chain\n"
             else:
                 return f"Invalid chain: {chain}\n"
@@ -291,6 +295,7 @@ def handle_iptables_command(terminal, parts):
             for chain in session['iptables_rules']:
                 session['iptables_rules'][chain] = []
                 session['rule_counters'][chain] = []
+            session.modified = True
             return "Flushed all chains\n"
     
     # Append rule
@@ -324,6 +329,7 @@ def handle_iptables_command(terminal, parts):
 
         session['iptables_rules'][chain].append(rule)
         session['rule_counters'][chain].append({'packets': 0, 'bytes': 0})
+        session.modified = True
         
         return f"Rule added to {chain} chain\n"
     
@@ -338,6 +344,7 @@ def handle_iptables_command(terminal, parts):
             if chain in session['iptables_rules'] and 0 <= rule_num < len(session['iptables_rules'][chain]):
                 del session['iptables_rules'][chain][rule_num]
                 del session['rule_counters'][chain][rule_num]
+                session.modified = True
                 return f"Deleted rule {rule_num + 1} from {chain} chain\n"
             else:
                 return f"Invalid rule number\n"
@@ -432,7 +439,6 @@ def index():
 def get_rules():
     """API endpoint to get session-specific rules for download"""
     init_session_if_needed()
-    print(f"DEBUG: Session in /api/rules: {session}")
     rules_text = "# Firewall Rules Configuration\n"
     rules_text += f"# Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
     
@@ -480,7 +486,9 @@ def clear_logs_endpoint():
             counter['packets'] = 0
             counter['bytes'] = 0
             
+    # Log the clear event
     log_firewall_event('INFO', 'N/A', 'N/A', 'N/A', None, "Logs and statistics cleared", 'info')
+    session.modified = True
     
     return jsonify({'status': 'success', 'message': 'Logs and counters cleared'})
 
