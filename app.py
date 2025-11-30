@@ -1,73 +1,40 @@
 import eventlet
 eventlet.monkey_patch()
 
-from flask import Flask, render_template, jsonify
+from flask import Flask, render_template, jsonify, session
 from flask_socketio import SocketIO, emit
 import time
 import random
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 import ipaddress
 import html
 import os
+import copy
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'firewall-simulator-secret-key'
+app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(minutes=45)
 socketio = SocketIO(app, cors_allowed_origins="*")
 
-# Network configuration for each terminal
-network_config = {
-    'insider': {
-        'ip': None,
-        'netmask': '255.255.255.0',
-        'gateway': None,
-        'network': None,
-        'zone': 'LAN1-INTERNAL'
-    },
-    'outsider': {
-        'ip': None,
-        'netmask': '255.255.255.0',
-        'gateway': None,
-        'network': None,
-        'zone': 'LAN2-EXTERNAL'
-    },
-    'dmz': {
-        'ip': None,
-        'netmask': '255.255.255.0',
-        'gateway': None,
-        'network': None,
-        'zone': 'DMZ-WEBSERVER'
-    },
-    'firewall': {
-        'ip': 'FIREWALL',
-        'netmask': '255.255.255.0',
-        'gateway': None,
-        'network': None,
-        'zone': 'FIREWALL-ADMIN'
-    }
-}
-
-# Iptables chains storage
-iptables_rules = {
-    'INPUT': [],
-    'OUTPUT': [],
-    'FORWARD': []
-}
-
-# Rule counters for statistics
-rule_counters = {
-    'INPUT': [],
-    'OUTPUT': [],
-    'FORWARD': []
-}
-
-# Firewall logs
-firewall_logs = []
 MAX_LOGS = 1000
 
+def get_default_state():
+    """Returns a deep copy of the default simulation state."""
+    return copy.deepcopy({
+        'network_config': {
+            'insider': { 'ip': None, 'netmask': '255.255.255.0', 'gateway': None, 'network': None, 'zone': 'LAN1-INTERNAL' },
+            'outsider': { 'ip': None, 'netmask': '255.255.255.0', 'gateway': None, 'network': None, 'zone': 'LAN2-EXTERNAL' },
+            'dmz': { 'ip': None, 'netmask': '255.255.255.0', 'gateway': None, 'network': None, 'zone': 'DMZ-WEBSERVER' },
+            'firewall': { 'ip': 'FIREWALL', 'netmask': '255.255.255.0', 'gateway': None, 'network': None, 'zone': 'FIREWALL-ADMIN' }
+        },
+        'iptables_rules': { 'INPUT': [], 'OUTPUT': [], 'FORWARD': [] },
+        'rule_counters': { 'INPUT': [], 'OUTPUT': [], 'FORWARD': [] },
+        'firewall_logs': []
+    })
+
 def log_firewall_event(action, source, destination, protocol, port, rule_info="", category="normal"):
-    """Log firewall events with enhanced details"""
-    global firewall_logs
+    """Log firewall events with enhanced details to the current session."""
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     # Sanitize all inputs to prevent XSS
@@ -100,21 +67,21 @@ def log_firewall_event(action, source, destination, protocol, port, rule_info=""
         'warning': html.escape(warning) if warning else None,
         'details': f"{action} traffic from {source} to {destination} ({protocol}" + (f":{port}" if port else "") + ")"
     }
-    firewall_logs.append(log_entry)
+    session['firewall_logs'].append(log_entry)
     
     # Keep only last MAX_LOGS entries
-    if len(firewall_logs) > MAX_LOGS:
-        firewall_logs = firewall_logs[-MAX_LOGS:]
+    if len(session['firewall_logs']) > MAX_LOGS:
+        session['firewall_logs'] = session['firewall_logs'][-MAX_LOGS:]
     
-    # Broadcast log to all clients
+    # Broadcast log to the current client
     socketio.emit('new_log', log_entry)
 
 def detect_rule_conflicts():
-    """Detect potential rule conflicts and misconfigurations"""
+    """Detect potential rule conflicts and misconfigurations from the session."""
     warnings = []
     
     for chain in ['INPUT', 'OUTPUT', 'FORWARD']:
-        rules = iptables_rules[chain]
+        rules = session['iptables_rules'][chain]
         
         # Check for conflicting rules
         for i, rule1 in enumerate(rules):
@@ -156,8 +123,8 @@ def ip_in_network(ip, network):
         return False
 
 def check_iptables_rule(chain, source_ip, dest_ip, protocol, port):
-    """Check if traffic matches iptables rules"""
-    rules = iptables_rules.get(chain, [])
+    """Check if traffic matches iptables rules in the current session."""
+    rules = session['iptables_rules'].get(chain, [])
     
     for idx, rule in enumerate(rules):
         # Check source
@@ -187,9 +154,9 @@ def check_iptables_rule(chain, source_ip, dest_ip, protocol, port):
                 continue
         
         # Rule matched - increment counter
-        if idx < len(rule_counters[chain]):
-            rule_counters[chain][idx]['packets'] += 1
-            rule_counters[chain][idx]['bytes'] += random.randint(40, 1500)
+        if idx < len(session['rule_counters'][chain]):
+            session['rule_counters'][chain][idx]['packets'] += 1
+            session['rule_counters'][chain][idx]['bytes'] += random.randint(40, 1500)
         
         # Log if LOG action
         if rule['target'] == 'LOG':
@@ -223,10 +190,10 @@ def calculate_network(ip_address):
         return None, None
 
 def handle_ifconfig_command(terminal, parts):
-    """Handle ifconfig commands"""
+    """Handle ifconfig commands within the current session."""
     if len(parts) == 1:
         # Show current configuration
-        config = network_config[terminal]
+        config = session['network_config'][terminal]
         if config['ip']:
             output = f"eth0: flags=4163<UP,BROADCAST,RUNNING,MULTICAST>  mtu 1500\n"
             output += f"        inet {config['ip']}  netmask {config['netmask']}  broadcast {config['gateway']}\n"
@@ -249,10 +216,10 @@ def handle_ifconfig_command(terminal, parts):
             # Calculate network and gateway
             network, gateway = calculate_network(ip)
             
-            # Update configuration
-            network_config[terminal]['ip'] = ip
-            network_config[terminal]['network'] = network
-            network_config[terminal]['gateway'] = gateway
+            # Update configuration in session
+            session['network_config'][terminal]['ip'] = ip
+            session['network_config'][terminal]['network'] = network
+            session['network_config'][terminal]['gateway'] = gateway
             
             # Update display
             socketio.emit('update_ip_display', {
@@ -268,7 +235,7 @@ def handle_ifconfig_command(terminal, parts):
         return "Usage: ifconfig [set ip <ip_address>]\n"
 
 def handle_iptables_command(terminal, parts):
-    """Handle iptables commands"""
+    """Handle iptables commands within the current session."""
     if len(parts) < 2:
         return "Usage: iptables [-A|-D|-L|-F] [chain] [options]\n"
     
@@ -286,10 +253,10 @@ def handle_iptables_command(terminal, parts):
             else:
                 output += f"{'target':<12} {'prot':<6} {'source':<20} {'destination':<20}\n"
             
-            for idx, rule in enumerate(iptables_rules[chain]):
-                if verbose and idx < len(rule_counters[chain]):
-                    pkts = rule_counters[chain][idx]['packets']
-                    bytes_count = rule_counters[chain][idx]['bytes']
+            for idx, rule in enumerate(session['iptables_rules'][chain]):
+                if verbose and idx < len(session['rule_counters'][chain]):
+                    pkts = session['rule_counters'][chain][idx]['packets']
+                    bytes_count = session['rule_counters'][chain][idx]['bytes']
                     output += f"{pkts:<8} {bytes_count:<10} "
                 
                 # Sanitize rule components for display
@@ -314,16 +281,16 @@ def handle_iptables_command(terminal, parts):
     elif option == '-F':
         chain = parts[2] if len(parts) > 2 else None
         if chain:
-            if chain in iptables_rules:
-                iptables_rules[chain] = []
-                rule_counters[chain] = []
+            if chain in session['iptables_rules']:
+                session['iptables_rules'][chain] = []
+                session['rule_counters'][chain] = []
                 return f"Flushed {chain} chain\n"
             else:
                 return f"Invalid chain: {chain}\n"
         else:
-            for chain in iptables_rules:
-                iptables_rules[chain] = []
-                rule_counters[chain] = []
+            for chain in session['iptables_rules']:
+                session['iptables_rules'][chain] = []
+                session['rule_counters'][chain] = []
             return "Flushed all chains\n"
     
     # Append rule
@@ -332,44 +299,31 @@ def handle_iptables_command(terminal, parts):
             return "Usage: iptables -A <chain> [options]\n"
         
         chain = parts[2]
-        if chain not in iptables_rules:
+        if chain not in session['iptables_rules']:
             return f"Invalid chain: {chain}. Use INPUT, OUTPUT, or FORWARD\n"
         
         # Parse rule options
         rule = {
-            'source': '0.0.0.0/0',
-            'destination': '0.0.0.0/0',
-            'protocol': 'all',
-            'sport': None,
-            'dport': None,
-            'target': 'DROP'
+            'source': '0.0.0.0/0', 'destination': '0.0.0.0/0', 'protocol': 'all',
+            'sport': None, 'dport': None, 'target': 'DROP'
         }
         
         i = 3
         while i < len(parts):
-            if parts[i] == '-s' and i + 1 < len(parts):
-                rule['source'] = parts[i + 1]
-                i += 2
-            elif parts[i] == '-d' and i + 1 < len(parts):
-                rule['destination'] = parts[i + 1]
-                i += 2
-            elif parts[i] == '-p' and i + 1 < len(parts):
-                rule['protocol'] = parts[i + 1]
-                i += 2
-            elif parts[i] == '--sport' and i + 1 < len(parts):
-                rule['sport'] = parts[i + 1]
-                i += 2
-            elif parts[i] == '--dport' and i + 1 < len(parts):
-                rule['dport'] = parts[i + 1]
-                i += 2
-            elif parts[i] == '-j' and i + 1 < len(parts):
-                rule['target'] = parts[i + 1]
-                i += 2
-            else:
-                i += 1
+            if parts[i] == '-s' and i + 1 < len(parts): rule['source'] = parts[i + 1]; i += 2
+            elif parts[i] == '-d' and i + 1 < len(parts): rule['destination'] = parts[i + 1]; i += 2
+            elif parts[i] == '-p' and i + 1 < len(parts): rule['protocol'] = parts[i + 1]; i += 2
+            elif parts[i] == '--sport' and i + 1 < len(parts): rule['sport'] = parts[i + 1]; i += 2
+            elif parts[i] == '--dport' and i + 1 < len(parts): rule['dport'] = parts[i + 1]; i += 2
+            elif parts[i] == '-j' and i + 1 < len(parts): rule['target'] = parts[i + 1]; i += 2
+            else: i += 1
         
-        iptables_rules[chain].append(rule)
-        rule_counters[chain].append({'packets': 0, 'bytes': 0})
+        # Prevent duplicate rules
+        if rule in session['iptables_rules'][chain]:
+            return "iptables: Rule already exists.\n"
+
+        session['iptables_rules'][chain].append(rule)
+        session['rule_counters'][chain].append({'packets': 0, 'bytes': 0})
         
         return f"Rule added to {chain} chain\n"
     
@@ -381,9 +335,9 @@ def handle_iptables_command(terminal, parts):
         chain = parts[2]
         try:
             rule_num = int(parts[3]) - 1
-            if chain in iptables_rules and 0 <= rule_num < len(iptables_rules[chain]):
-                del iptables_rules[chain][rule_num]
-                del rule_counters[chain][rule_num]
+            if chain in session['iptables_rules'] and 0 <= rule_num < len(session['iptables_rules'][chain]):
+                del session['iptables_rules'][chain][rule_num]
+                del session['rule_counters'][chain][rule_num]
                 return f"Deleted rule {rule_num + 1} from {chain} chain\n"
             else:
                 return f"Invalid rule number\n"
@@ -394,7 +348,7 @@ def handle_iptables_command(terminal, parts):
         return f"Unknown option: {option}\n"
 
 def handle_nmap_command(terminal, parts):
-    """Handle nmap port scanning"""
+    """Handle nmap port scanning within the current session."""
     if len(parts) < 2:
         return "Usage: nmap [-p <ports>] <target>\n"
     
@@ -404,54 +358,31 @@ def handle_nmap_command(terminal, parts):
     i = 1
     while i < len(parts):
         if parts[i] == '-p' and i + 1 < len(parts):
-            # Parse port specification
-            port_spec = parts[i + 1]
-            if ',' in port_spec:
-                ports_to_scan = [int(p) for p in port_spec.split(',')]
-            elif '-' in port_spec:
-                start, end = map(int, port_spec.split('-'))
-                ports_to_scan = list(range(start, end + 1))
-            else:
-                ports_to_scan = [int(port_spec)]
-            i += 2
-        else:
-            target = parts[i]
-            i += 1
+            port_spec = parts[i + 1]; i += 2
+            if ',' in port_spec: ports_to_scan = [int(p) for p in port_spec.split(',')]
+            elif '-' in port_spec: start, end = map(int, port_spec.split('-')); ports_to_scan = list(range(start, end + 1))
+            else: ports_to_scan = [int(port_spec)]
+        else: target = parts[i]; i += 1
     
     if not target:
         return "Error: No target specified\n"
     
-    # Check if source IP is configured
-    source_ip = network_config[terminal]['ip']
+    source_ip = session['network_config'][terminal]['ip']
     if not source_ip:
         return "Error: No IP address configured. Use 'ifconfig set ip <ip>'\n"
     
-    # Sanitize target for display
     safe_target = html.escape(target)
-    
     output = f"\nStarting Nmap scan on {safe_target}\n"
     output += f"Nmap scan report for {safe_target}\n"
     output += f"Host is up (0.0010s latency).\n\n"
     output += f"{'PORT':<10} {'STATE':<12} {'SERVICE'}\n"
     
     for port in ports_to_scan:
-        # Check firewall rules
         allowed, message = check_iptables_rule('FORWARD', source_ip, target, 'tcp', port)
         
         if allowed:
-            # Simulate port state
             state = random.choice(['open', 'open', 'open', 'closed'])
-            service = {
-                80: 'http',
-                443: 'https',
-                22: 'ssh',
-                21: 'ftp',
-                23: 'telnet',
-                25: 'smtp',
-                53: 'dns',
-                3306: 'mysql'
-            }.get(port, 'unknown')
-            
+            service = { 80: 'http', 443: 'https', 22: 'ssh', 21: 'ftp', 23: 'telnet', 25: 'smtp', 53: 'dns', 3306: 'mysql' }.get(port, 'unknown')
             output += f"{port}/tcp{'':<3} {state:<12} {service}\n"
         else:
             output += f"{port}/tcp{'':<3} {'filtered':<12} (blocked by firewall)\n"
@@ -462,15 +393,12 @@ def handle_nmap_command(terminal, parts):
     return output
 
 def handle_ping_command(terminal, target):
-    """Handle ping command with firewall checking"""
-    source_ip = network_config[terminal]['ip']
+    """Handle ping command with firewall checking within the current session."""
+    source_ip = session['network_config'][terminal]['ip']
     if not source_ip:
         return "Error: No IP address configured. Use 'ifconfig set ip <ip>'\n"
     
-    # Sanitize target for display
     safe_target = html.escape(target)
-    
-    # Check firewall
     allowed, message = check_iptables_rule('FORWARD', source_ip, target, 'icmp', None)
     
     if not allowed:
@@ -487,30 +415,35 @@ def handle_ping_command(terminal, target):
     output += f"4 packets transmitted, 4 received, 0% packet loss\n"
     return output
 
+def init_session_if_needed():
+    """Initializes the simulation state if not already in the session."""
+    if 'initialized' not in session:
+        session.permanent = True
+        session.update(get_default_state())
+        session['initialized'] = True
+        lifetime = app.config['PERMANENT_SESSION_LIFETIME'].total_seconds()
+        socketio.emit('session_initialized', {'lifetime': lifetime})
+
 @app.route('/')
 def index():
     return render_template('index.html')
 
 @app.route('/api/rules')
 def get_rules():
-    """API endpoint to get rules for download"""
+    """API endpoint to get session-specific rules for download"""
+    init_session_if_needed()
     rules_text = "# Firewall Rules Configuration\n"
     rules_text += f"# Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
     
     for chain in ['INPUT', 'OUTPUT', 'FORWARD']:
         rules_text += f"# {chain} Chain\n"
-        for rule in iptables_rules[chain]:
+        for rule in session['iptables_rules'][chain]:
             cmd = f"iptables -A {chain}"
-            if rule['source'] != '0.0.0.0/0':
-                cmd += f" -s {rule['source']}"
-            if rule['destination'] != '0.0.0.0/0':
-                cmd += f" -d {rule['destination']}"
-            if rule['protocol'] != 'all':
-                cmd += f" -p {rule['protocol']}"
-            if rule['sport']:
-                cmd += f" --sport {rule['sport']}"
-            if rule['dport']:
-                cmd += f" --dport {rule['dport']}"
+            if rule['source'] != '0.0.0.0/0': cmd += f" -s {rule['source']}"
+            if rule['destination'] != '0.0.0.0/0': cmd += f" -d {rule['destination']}"
+            if rule['protocol'] != 'all': cmd += f" -p {rule['protocol']}"
+            if rule['sport']: cmd += f" --sport {rule['sport']}"
+            if rule['dport']: cmd += f" --dport {rule['dport']}"
             cmd += f" -j {rule['target']}"
             rules_text += cmd + "\n"
         rules_text += "\n"
@@ -519,39 +452,41 @@ def get_rules():
 
 @app.route('/api/logs')
 def get_logs():
-    """API endpoint to get firewall logs"""
+    """API endpoint to get session-specific firewall logs"""
+    init_session_if_needed()
     warnings = detect_rule_conflicts()
     
     return jsonify({
-        'logs': firewall_logs,
+        'logs': session['firewall_logs'],
         'warnings': warnings,
         'stats': {
-            'total': len(firewall_logs),
-            'blocked': len([l for l in firewall_logs if l['action'] in ['DROP', 'REJECT']]),
-            'allowed': len([l for l in firewall_logs if l['action'] == 'ACCEPT']),
-            'warnings': len([l for l in firewall_logs if l['category'] == 'warning']) + len(warnings)
+            'total': len(session['firewall_logs']),
+            'blocked': len([l for l in session['firewall_logs'] if l['action'] in ['DROP', 'REJECT']]),
+            'allowed': len([l for l in session['firewall_logs'] if l['action'] == 'ACCEPT']),
+            'warnings': len([l for l in session['firewall_logs'] if l['category'] == 'warning']) + len(warnings)
         }
     })
 
 @app.route('/api/logs/clear', methods=['POST'])
 def clear_logs_endpoint():
-    """API endpoint to clear all logs and counters"""
-    global firewall_logs, rule_counters
-    firewall_logs = []
+    """API endpoint to clear session-specific logs and counters"""
+    init_session_if_needed()
+    session['firewall_logs'] = []
     
     # Reset rule counters
-    for chain in rule_counters:
-        for counter in rule_counters[chain]:
+    for chain in session['rule_counters']:
+        for counter in session['rule_counters'][chain]:
             counter['packets'] = 0
             counter['bytes'] = 0
             
-    # Log the clear event
     log_firewall_event('INFO', 'N/A', 'N/A', 'N/A', None, "Logs and statistics cleared", 'info')
     
     return jsonify({'status': 'success', 'message': 'Logs and counters cleared'})
 
 @socketio.on('connect')
 def handle_connect():
+    """Handle new client connection and initialize their session."""
+    init_session_if_needed()
     print('Client connected')
     emit('connected', {'data': 'Connected to firewall simulator'})
 
@@ -561,7 +496,8 @@ def handle_disconnect():
 
 @socketio.on('command')
 def handle_command(data):
-    """Handle terminal commands from clients"""
+    """Handle terminal commands from clients for the current session."""
+    init_session_if_needed()
     terminal = data.get('terminal', 'insider')
     command = data.get('command', '').strip()
     
@@ -605,8 +541,8 @@ Network Utilities:
 
 Examples:
   ifconfig set ip 192.168.10.10
-  iptables -A OUTPUT -s 192.168.10.0/24 -p tcp --dport 80 -j ACCEPT
-  iptables -A INPUT -s 192.168.20.0/24 -d 192.168.10.0/24 -j DROP
+  iptables -A FORWARD -s 192.168.10.0/24 -p tcp --dport 80 -j ACCEPT
+  iptables -A FORWARD -d 192.168.10.0/24 -j DROP
   nmap -p 80,443 192.168.30.10
   iptables -L -v
 """
@@ -627,7 +563,7 @@ Examples:
                 output = handle_ping_command(terminal, parts[1])
         
         elif cmd == 'whoami':
-            config = network_config[terminal]
+            config = session['network_config'][terminal]
             output = f"Terminal: {terminal}\n"
             output += f"Zone: {config['zone']}\n"
             output += f"Network: {config['network']}\n"
@@ -664,7 +600,7 @@ Examples:
             if len(parts) < 3:
                 output = "Usage: nc <target> <port>\n"
             else:
-                source_ip = network_config[terminal]['ip']
+                source_ip = session['network_config'][terminal]['ip']
                 if not source_ip:
                     output = "Error: No IP address configured\n"
                 else:
@@ -681,7 +617,7 @@ Examples:
             if len(parts) < 2:
                 output = "Usage: curl <url>\n"
             else:
-                source_ip = network_config[terminal]['ip']
+                source_ip = session['network_config'][terminal]['ip']
                 if not source_ip:
                     output = "Error: No IP address configured\n"
                 else:

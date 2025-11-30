@@ -165,6 +165,22 @@ socket.on('connected', (data) => {
     console.log('Server message:', data.data);
 });
 
+let sessionTimer = null;
+socket.on('session_initialized', (data) => {
+    console.log(`Session initialized with a lifetime of ${data.lifetime} seconds.`);
+    
+    // Clear any existing timer
+    if (sessionTimer) {
+        clearTimeout(sessionTimer);
+    }
+    
+    // Set a timer to alert the user and reload the page upon session expiry
+    sessionTimer = setTimeout(() => {
+        alert("Your 45-minute session has expired. The simulator will now reset.");
+        location.reload();
+    }, data.lifetime * 1000); // Convert seconds to milliseconds
+});
+
 socket.on('output', (data) => {
     const term = terminals[data.terminal];
     if (term) {
