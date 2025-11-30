@@ -19,6 +19,10 @@
         </header>
         
         <div class="control-panel">
+            <button class="upload-rules-btn" onclick="triggerUpload()">
+                📤 Upload Rules
+            </button>
+            <input type="file" id="rule-file-input" accept=".waf" style="display: none;" />
             <button class="download-rules-btn" onclick="downloadRules()">
                 📥 Download Rules
             </button>

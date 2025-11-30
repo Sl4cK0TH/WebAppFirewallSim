@@ -45,7 +45,7 @@ header h1 {
     justify-content: center;
 }
 
-.download-rules-btn, .show-logs-btn, .clear-logs-btn {
+.download-rules-btn, .show-logs-btn, .clear-logs-btn, .upload-rules-btn {
     padding: 12px 24px;
     background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
     border: none;
@@ -58,7 +58,7 @@ header h1 {
     box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
 }
 
-.download-rules-btn:hover, .show-logs-btn:hover {
+.download-rules-btn:hover, .show-logs-btn:hover, .upload-rules-btn:hover {
     transform: translateY(-2px);
     box-shadow: 0 5px 20px rgba(102, 126, 234, 0.4);
 }

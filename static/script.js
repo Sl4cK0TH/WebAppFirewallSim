@@ -241,11 +241,49 @@ socket.on('new_log', (log) => {
         addLogEntry(log);
     }
     
-    // Update stats
-    fetch('/api/logs')
-        .then(response => response.json())
-        .then(data => updateLogStats(data.stats))
-        .catch(error => console.error('Error updating stats:', error));
+    // Update stats by getting latest log data
+    socket.emit('get_logs');
+});
+
+socket.on('logs_data', (data) => {
+    const logsContent = document.getElementById('logs-content');
+    if (!logsContent) return;
+    logsContent.innerHTML = '';
+    
+    updateLogStats(data.stats);
+    
+    const logsToDisplay = data.logs || [];
+    if (logsToDisplay.length === 0) {
+        logsContent.innerHTML = '<div class="no-logs">No firewall logs yet.</div>';
+        return;
+    }
+    
+    const filteredLogs = filterLogsByCategory(logsToDisplay, currentLogFilter);
+    
+    if (filteredLogs.length === 0) {
+        logsContent.innerHTML = `<div class="no-logs">No logs in "${currentLogFilter}" category.</div>`;
+        return;
+    }
+    
+    filteredLogs.forEach(log => {
+        addLogEntry(log);
+    });
+});
+
+socket.on('rules_data', (data) => {
+    const blob = new Blob([data.rules], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    
+    // Create timestamped filename e.g., 20251130094500.waf
+    const d = new Date();
+    const timestamp = `${d.getFullYear()}${(d.getMonth()+1).toString().padStart(2, '0')}${d.getDate().toString().padStart(2, '0')}` +
+                    `${d.getHours().toString().padStart(2, '0')}${d.getMinutes().toString().padStart(2, '0')}${d.getSeconds().toString().padStart(2, '0')}`;
+    a.download = `${timestamp}.waf`;
+    
+    a.click();
+    URL.revokeObjectURL(url);
 });
 
 socket.on('disconnect', () => {
@@ -276,21 +314,43 @@ socket.on('reconnect', () => {
 
 // Download rules functionality
 function downloadRules() {
-    fetch('/api/rules')
-        .then(response => response.json())
-        .then(data => {
-            const blob = new Blob([data.rules], { type: 'text/plain' });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = 'firewall-rules.rules';
-            a.click();
-            URL.revokeObjectURL(url);
-        })
-        .catch(error => {
-            console.error('Error downloading rules:', error);
-            alert('Error downloading rules');
-        });
+    socket.emit('get_rules');
+}
+
+// Upload rules functionality
+function triggerUpload() {
+    document.getElementById('rule-file-input').click();
+}
+
+function setupUploadListener() {
+    const fileInput = document.getElementById('rule-file-input');
+    fileInput.addEventListener('change', (event) => {
+        const file = event.target.files[0];
+        if (!file) {
+            return;
+        }
+        if (!file.name.endsWith('.waf')) {
+            alert("Invalid file type. Please select a .waf file.");
+            return;
+        }
+
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            const content = e.target.result;
+            socket.emit('load_rules_from_script', { script: content });
+            // Add a visual confirmation
+            const firewallTerminal = terminals['firewall'];
+            if(firewallTerminal) {
+                firewallTerminal.writeln('');
+                firewallTerminal.writeln('\x1b[1;32mRules loaded from file. Run "iptables -L" to see them.\x1b[0m');
+                firewallTerminal.write(`\x1b[1;36mfirewall@firewall\x1b[0m:\x1b[1;34m~\x1b[0m$ `);
+            }
+        };
+        reader.readAsText(file);
+
+        // Reset the file input so the user can upload the same file again if needed
+        event.target.value = '';
+    });
 }
 
 // Toggle logs panel
@@ -308,40 +368,7 @@ let currentLogFilter = 'all';
 
 // Load logs from server
 function loadLogs() {
-    fetch('/api/logs')
-        .then(response => response.json())
-        .then(data => {
-            const logsContent = document.getElementById('logs-content');
-            logsContent.innerHTML = '';
-            
-            // Update stats
-            updateLogStats(data.stats || {
-                total: data.logs.length,
-                blocked: data.logs.filter(l => ['DROP', 'REJECT'].includes(l.action)).length,
-                allowed: data.logs.filter(l => l.action === 'ACCEPT').length,
-                warnings: data.logs.filter(l => l.category === 'warning').length
-            });
-            
-            if (data.logs.length === 0) {
-                logsContent.innerHTML = '<div class="no-logs">No firewall logs yet. Traffic will be logged as rules are applied.</div>';
-                return;
-            }
-            
-            // Apply current filter
-            const filteredLogs = filterLogsByCategory(data.logs, currentLogFilter);
-            
-            if (filteredLogs.length === 0) {
-                logsContent.innerHTML = `<div class="no-logs">No logs in "${currentLogFilter}" category.</div>`;
-                return;
-            }
-            
-            filteredLogs.forEach(log => {
-                addLogEntry(log);
-            });
-        })
-        .catch(error => {
-            console.error('Error loading logs:', error);
-        });
+    socket.emit('get_logs');
 }
 
 function updateLogStats(stats) {
@@ -370,57 +397,20 @@ function filterLogs(category) {
     loadLogs();
 }
 
+socket.on('raw_logs_data', (data) => {
+    const blob = new Blob([data.logs], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `firewall_logs_${Date.now()}.txt`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+});
+
 function downloadLogs() {
-    fetch('/api/logs')
-        .then(response => response.json())
-        .then(data => {
-            let content = '# Firewall Logs Export\n';
-            content += `# Generated: ${new Date().toLocaleString()}\n`;
-            content += `# Total Logs: ${data.stats.total}\n`;
-            content += `# Blocked: ${data.stats.blocked}\n`;
-            content += `# Allowed: ${data.stats.allowed}\n`;
-            content += `# Warnings: ${data.stats.warnings}\n`;
-            content += '\n## Log Entries\n\n';
-            
-            data.logs.forEach(log => {
-                const timestamp = new Date(log.timestamp).toLocaleString();
-                content += `[${timestamp}] ${log.action} - `;
-                
-                if (log.action === 'WARNING') {
-                    content += `${log.rule_info || log.source}\n`;
-                } else {
-                    content += `${log.source} → ${log.destination} (${log.protocol}${log.port ? ':' + log.port : ''})`;
-                    if (log.rule_info) {
-                        content += ` | Rule: ${log.rule_info}`;
-                    }
-                    if (log.warning) {
-                        content += ` | Warning: ${log.warning}`;
-                    }
-                    content += '\n';
-                }
-            });
-            
-            if (data.warnings && data.warnings.length > 0) {
-                content += '\n## Detected Warnings\n\n';
-                data.warnings.forEach(warning => {
-                    content += `- ${warning}\n`;
-                });
-            }
-            
-            const blob = new Blob([content], { type: 'text/plain' });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = `firewall_logs_${Date.now()}.txt`;
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            URL.revokeObjectURL(url);
-        })
-        .catch(error => {
-            console.error('Error downloading logs:', error);
-            alert('Failed to download logs. Please try again.');
-        });
+    socket.emit('get_raw_logs');
 }
 
 // Add log entry to display
@@ -432,32 +422,37 @@ function addLogEntry(log) {
     logEntry.className = 'log-entry';
     
     // Determine log type for styling
-    if (log.category === 'warning' || log.action === 'WARNING') {
+    const action = log.action.toLowerCase();
+    const category = log.category;
+
+    if (category === 'warning' || action === 'warning') {
         logEntry.classList.add('log-warning');
-    } else if (log.action === 'DROP' || log.action === 'REJECT') {
+    } else if (action === 'drop' || action === 'reject') {
         logEntry.classList.add('log-blocked');
-    } else if (log.action === 'ACCEPT') {
+    } else if (action === 'accept') {
         logEntry.classList.add('log-allowed');
+    } else if (category === 'info') {
+        logEntry.classList.add('log-info'); // A new style might be needed for this
     }
     
     const timestamp = new Date(log.timestamp).toLocaleTimeString();
     
     let detailsHtml = '';
-    if (log.action === 'WARNING') {
-        detailsHtml = `<div class="log-details warning-details">⚠️ ${log.rule_info || log.source}</div>`;
+    if (action === 'warning' || category === 'info') {
+        detailsHtml = `<div class="log-details">ℹ️ ${log.rule || log.details}</div>`;
     } else {
         detailsHtml = `
             <div class="log-details">
-                ${log.source} → ${log.destination} (${log.protocol.toUpperCase()}${log.port ? ':' + log.port : ''})
+                ${log.source} → ${log.destination} (${log.protocol.toUpperCase()}${log.port && log.port !== 'None' ? ':' + log.port : ''})
             </div>
-            ${log.rule_info ? `<div class="log-rule">Rule: ${log.rule_info}</div>` : ''}
+            ${log.rule ? `<div class="log-rule">Rule: ${log.rule}</div>` : ''}
             ${log.warning ? `<div class="log-warning-text">⚠️ ${log.warning}</div>` : ''}
         `;
     }
     
     logEntry.innerHTML = `
         <div class="log-time">${timestamp}</div>
-        <div class="log-action ${log.action.toLowerCase()}">${log.action}</div>
+        <div class="log-action ${action}">${log.action}</div>
         ${detailsHtml}
     `;
     
@@ -470,33 +465,11 @@ function clearLogs() {
     if (!confirm("Are you sure you want to clear all logs and statistics? This action cannot be undone.")) {
         return;
     }
-
-    fetch('/api/logs/clear', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json'
-        }
-    })
-    .then(response => response.json())
-    .then(data => {
-        if (data.status === 'success') {
-            const logsContent = document.getElementById('logs-content');
-            if (logsContent) {
-                logsContent.innerHTML = '<div class="no-logs">Logs cleared successfully.</div>';
-            }
-            // Reload logs to update stats and show the cleared message
-            loadLogs();
-        } else {
-            alert('Failed to clear logs.');
-        }
-    })
-    .catch(error => {
-        console.error('Error clearing logs:', error);
-        alert('An error occurred while clearing logs.');
-    });
+    socket.emit('clear_logs');
 }
 
 // Initialize on page load
 window.addEventListener('DOMContentLoaded', () => {
     initializeTerminals();
+    setupUploadListener();
 });

@@ -435,7 +435,7 @@ def init_session_if_needed():
 def index():
     return render_template('index.html')
 
-@app.route('/api/rules')
+@socketio.on('get_rules')
 def get_rules():
     """API endpoint to get session-specific rules for download"""
     init_session_if_needed()
@@ -455,15 +455,15 @@ def get_rules():
             rules_text += cmd + "\n"
         rules_text += "\n"
     
-    return jsonify({'rules': rules_text})
+    emit('rules_data', {'rules': rules_text})
 
-@app.route('/api/logs')
+@socketio.on('get_logs')
 def get_logs():
     """API endpoint to get session-specific firewall logs"""
     init_session_if_needed()
     warnings = detect_rule_conflicts()
     
-    return jsonify({
+    emit('logs_data', {
         'logs': session['firewall_logs'],
         'warnings': warnings,
         'stats': {
@@ -474,7 +474,7 @@ def get_logs():
         }
     })
 
-@app.route('/api/logs/clear', methods=['POST'])
+@socketio.on('clear_logs')
 def clear_logs_endpoint():
     """API endpoint to clear session-specific logs and counters"""
     init_session_if_needed()
@@ -486,11 +486,65 @@ def clear_logs_endpoint():
             counter['packets'] = 0
             counter['bytes'] = 0
             
-    # Log the clear event
     log_firewall_event('INFO', 'N/A', 'N/A', 'N/A', None, "Logs and statistics cleared", 'info')
     session.modified = True
     
-    return jsonify({'status': 'success', 'message': 'Logs and counters cleared'})
+    # After clearing, immediately send back the new empty log state
+    get_logs()
+
+@socketio.on('load_rules_from_script')
+def load_rules_from_script(data):
+    """Load and execute a script of iptables commands."""
+    init_session_if_needed()
+    script_content = data.get('script', '')
+
+    # First, flush all rules
+    for chain in session['iptables_rules']:
+        session['iptables_rules'][chain] = []
+        session['rule_counters'][chain] = []
+    session.modified = True
+
+    # Process each line in the script
+    for line in script_content.splitlines():
+        line = line.strip()
+        if line and line.lower().startswith('iptables'):
+            parts = line.split()
+            handle_iptables_command('firewall', parts)
+    
+    # Log the event
+    log_firewall_event('INFO', 'N/A', 'N/A', 'N/A', None, "Firewall rules loaded from file.", 'info')
+
+@socketio.on('get_raw_logs')
+def get_raw_logs():
+    """Generate and send raw text for log file download."""
+    init_session_if_needed()
+    warnings = detect_rule_conflicts()
+    
+    stats = {
+        'total': len(session['firewall_logs']),
+        'blocked': len([l for l in session['firewall_logs'] if l['action'] in ['DROP', 'REJECT']]),
+        'allowed': len([l for l in session['firewall_logs'] if l['action'] == 'ACCEPT']),
+        'warnings': len([l for l in session['firewall_logs'] if l['category'] == 'warning']) + len(warnings)
+    }
+
+    content = '# Firewall Logs Export\n'
+    content += f"# Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+    content += f"# Total Logs: {stats['total']}\n"
+    content += f"# Blocked: {stats['blocked']}\n"
+    content += f"# Allowed: {stats['allowed']}\n"
+    content += f"# Warnings: {stats['warnings']}\n\n"
+    content += '## Log Entries\n\n'
+    
+    for log in session.get('firewall_logs', []):
+        content += f"[{log['timestamp']}] {log['action']} - "
+        details = log.get('details', '')
+        if log.get('rule'):
+            details += f" | Rule: {log['rule']}"
+        if log.get('warning'):
+            details += f" | Warning: {log['warning']}"
+        content += details + '\n'
+
+    emit('raw_logs_data', {'logs': content})
 
 @socketio.on('connect')
 def handle_connect():
