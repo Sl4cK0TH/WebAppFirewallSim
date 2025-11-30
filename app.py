@@ -432,6 +432,7 @@ def index():
 def get_rules():
     """API endpoint to get session-specific rules for download"""
     init_session_if_needed()
+    print(f"DEBUG: Session in /api/rules: {session}")
     rules_text = "# Firewall Rules Configuration\n"
     rules_text += f"# Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
     
